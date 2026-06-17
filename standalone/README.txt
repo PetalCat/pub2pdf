@@ -4,7 +4,11 @@ pub2pdf — standalone Microsoft Publisher (.pub) to PDF converter
 No Microsoft Office, no LibreOffice, no Python required. This folder is
 self-contained; copy it anywhere (USB stick, another PC) and run.
 
-Usage (from a terminal):
+EASIEST: just DOUBLE-CLICK pub2pdf.exe to open the app. Add files or a whole
+folder, choose where the PDFs go, and click Convert — a progress bar and a
+per-file log show how the batch is going.
+
+Command line (for scripts / headless batches):
 
     pub2pdf.exe <path> [options]
 
@@ -12,9 +16,11 @@ Usage (from a terminal):
       -o, --output-dir D  write PDFs into D (default: next to each source file)
       -r, --recurse       when path is a directory, also search subdirectories
       -f, --force         overwrite existing PDFs instead of skipping
+      --gui               open the app even when a path is given
 
 Examples:
 
+    pub2pdf.exe                       (opens the app)
     pub2pdf.exe newsletter.pub
     pub2pdf.exe C:\flyers -r -o C:\flyers\pdf
 

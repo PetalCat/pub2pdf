@@ -1,0 +1,25 @@
+name: ci
+
+# Fast checks on every push / PR: byte-compile all sources and run the unit
+# tests for the orchestrator's pure logic (these don't need the native Windows
+# toolchain, so they run on Linux in seconds). The full standalone build still
+# happens in release.yml on a version tag.
+on:
+  push:
+    branches: ['**']
+  pull_request: {}
+  workflow_dispatch: {}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --upgrade pypdf pytest
+      - name: Byte-compile (syntax check)
+        run: python -m compileall -q pub2pdf.py standalone/pub2pdf_app.py
+      - name: Unit tests
+        run: python -m pytest tests/ -q
