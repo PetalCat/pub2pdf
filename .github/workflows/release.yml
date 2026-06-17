@@ -1,0 +1,82 @@
+name: build-and-release
+
+# Compiles the native toolchain (libmspub + librevenge), builds svg2pdf and
+# the PyInstaller orchestrator, packages the standalone app, and — on a
+# version tag — attaches the zip to a GitHub Release.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust + svg2pdf
+        uses: dtolnay/rust-toolchain@stable
+      - run: cargo install svg2pdf-cli --locked
+        shell: bash
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --upgrade pyinstaller pypdf
+        shell: bash
+
+      - name: Set up MSYS2 toolchain
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            make m4
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-make
+            mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-boost
+            mingw-w64-x86_64-icu
+            mingw-w64-x86_64-zlib
+
+      - name: Build native toolchain (libmspub, librevenge)
+        shell: msys2 {0}
+        env:
+          SVG2PDF_EXE: ${{ runner.tool_cache }}/../svg2pdf.exe  # overridden below
+        run: |
+          # Resolve the cargo-installed svg2pdf.exe via the Windows user profile.
+          export SVG2PDF_EXE="$(cygpath "$USERPROFILE")/.cargo/bin/svg2pdf.exe"
+          bash scripts/build-native.sh
+
+      - name: Package standalone app
+        shell: bash
+        run: |
+          python -m PyInstaller --onefile --console --name pub2pdf \
+            --distpath dist/pub2pdf-standalone \
+            --workpath build/pyinstaller --specpath build/pyinstaller \
+            standalone/pub2pdf_app.py
+          cp -r standalone/bin dist/pub2pdf-standalone/bin
+          cp standalone/README.txt dist/pub2pdf-standalone/README.txt 2>/dev/null || true
+
+      - name: Zip
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/pub2pdf-standalone/* `
+            -DestinationPath pub2pdf-standalone-windows-x64.zip -Force
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pub2pdf-standalone-windows-x64
+          path: pub2pdf-standalone-windows-x64.zip
+
+      - name: Attach to Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: pub2pdf-standalone-windows-x64.zip
+          generate_release_notes: true

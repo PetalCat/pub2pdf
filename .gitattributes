@@ -1,0 +1,5 @@
+# Scripts that run in bash (locally via MSYS2 and on CI runners) must keep
+# LF endings, regardless of the checkout platform's autocrlf setting.
+*.sh    text eol=lf
+*.yml   text eol=lf
+*.py    text eol=lf

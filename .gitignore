@@ -1,0 +1,16 @@
+# Build artifacts and compiled binaries — produced by CI into Releases,
+# or locally via scripts/build-native.sh. Never committed.
+/build/
+/dist/
+/standalone/bin/
+
+# PyInstaller
+*.spec
+__pycache__/
+*.pyc
+
+# Editor / OS cruft
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
