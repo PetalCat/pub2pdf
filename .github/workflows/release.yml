@@ -62,6 +62,22 @@ jobs:
           cp -r standalone/bin dist/pub2pdf-standalone/bin
           cp standalone/README.txt dist/pub2pdf-standalone/README.txt 2>/dev/null || true
 
+      - name: Smoke-test the packaged app
+        # Runs the frozen exe from a plain Windows shell (not MSYS2), so DLL
+        # loading matches a real user double-clicking it. Catches a bin/ that
+        # is missing libmspub/librevenge (STATUS_DLL_NOT_FOUND, 0xC0000135)
+        # before a broken build can be published.
+        shell: pwsh
+        run: |
+          $exe = "dist/pub2pdf-standalone/pub2pdf.exe"
+          & $exe tests/fixtures/sample.pub -o "$env:RUNNER_TEMP/smoke"
+          if ($LASTEXITCODE -ne 0) { throw "converter exited $LASTEXITCODE" }
+          $pdf = "$env:RUNNER_TEMP/smoke/sample.pdf"
+          if (-not (Test-Path $pdf)) { throw "no PDF produced" }
+          $size = (Get-Item $pdf).Length
+          if ($size -lt 500) { throw "PDF suspiciously small ($size bytes)" }
+          Write-Host "smoke test OK: $pdf ($size bytes)"
+
       - name: Zip
         shell: pwsh
         run: |

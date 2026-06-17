@@ -88,11 +88,28 @@ rm -rf "$bin_out"; mkdir -p "$bin_out"
 cp "$prefix/bin/pub2xhtml.exe" "$prefix/bin/pub2raw.exe" "$bin_out/"
 cp "$svg2pdf" "$bin_out/svg2pdf.exe"
 
-# Copy every mingw64 DLL that pub2xhtml depends on (recursively resolved).
-ldd "$bin_out/pub2xhtml.exe" \
-  | awk '/\/mingw64\// {print $3}' \
-  | sort -u \
-  | while read -r dll; do cp -n "$dll" "$bin_out/"; done
+# Copy the full DLL dependency closure of pub2xhtml. We match by *basename*
+# and look in both our build prefix (libmspub/librevenge live here) and the
+# mingw toolchain (icu, libstdc++, zlib, ...). Matching on path text is
+# fragile — ldd prints mixed /mingw64 and Windows-style paths depending on
+# host — whereas "is this name present in a dir we control?" is unambiguous,
+# and naturally skips Windows system DLLs (KERNEL32, etc.).
+mingw_bin="${MINGW_PREFIX:-/mingw64}/bin"
+ldd "$bin_out/pub2xhtml.exe" | awk '{print $1}' | sort -u | while read -r name; do
+  for dir in "$prefix/bin" "$mingw_bin"; do
+    if [ -f "$dir/$name" ]; then cp -n "$dir/$name" "$bin_out/"; break; fi
+  done
+done
+
+# Fail loudly if our own parser libraries didn't make it in — the exact bug
+# this guards against (a bin/ missing libmspub fails at runtime with an opaque
+# STATUS_DLL_NOT_FOUND, 0xC0000135).
+for required in pub2xhtml.exe svg2pdf.exe libmspub-0.1.dll librevenge-0.0.dll; do
+  if [ ! -f "$bin_out/$required" ]; then
+    echo "ERROR: $required missing from assembled bin/ — aborting" >&2
+    exit 1
+  fi
+done
 
 echo "==> bin/ contents:"
 ls -1 "$bin_out"
