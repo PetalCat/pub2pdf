@@ -11,6 +11,10 @@ Converts Microsoft Publisher (`.pub`) files to PDF.
    (`standalone/pub2pdf_app.py`). It is **not committed** — CI builds it on each
    `v*` tag and publishes the zip to
    [Releases](../../releases). To build it yourself, see [BUILD.md](BUILD.md).
+   **Double-click `pub2pdf.exe` to open the GUI** (queue files/folders, pick
+   where PDFs go, watch a progress bar) — or pass a path on the command line for
+   the same batch conversion headless. Ideal for migrating a whole folder of
+   `.pub` files at once with no install.
 
 | Engine | Needs | Fidelity |
 |---|---|---|
