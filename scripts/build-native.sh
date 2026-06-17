@@ -16,7 +16,18 @@ set -euo pipefail
 
 LIBREVENGE_VER=0.0.5
 LIBMSPUB_VER=0.1.4
-MIRROR=https://dev-www.libreoffice.org/src
+
+# Mirror candidates per package, tried in order. The dev-www LibreOffice mirror
+# is canonical but intermittently 404s for librevenge, so SourceForge is listed
+# as a fallback. Each download is validated as a real xz archive before use.
+LIBREVENGE_URLS="
+https://dev-www.libreoffice.org/src/librevenge-${LIBREVENGE_VER}.tar.xz
+https://downloads.sourceforge.net/project/libwpd/librevenge/librevenge-${LIBREVENGE_VER}/librevenge-${LIBREVENGE_VER}.tar.xz
+"
+LIBMSPUB_URLS="
+https://dev-www.libreoffice.org/src/libmspub-${LIBMSPUB_VER}.tar.xz
+https://downloads.sourceforge.net/project/libmspub/libmspub/libmspub-${LIBMSPUB_VER}/libmspub-${LIBMSPUB_VER}.tar.xz
+"
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 build_dir="$repo_root/build"
@@ -27,15 +38,28 @@ mkdir -p "$build_dir" "$prefix" "$bin_out"
 export PKG_CONFIG_PATH="$prefix/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 export PATH="$prefix/bin:$PATH"
 
-fetch() { # url dest
-  [ -f "$2" ] || curl -fsSL -o "$2" "$1"
+fetch_tarball() { # name version url-list -> echoes path to a validated .tar.xz
+  local name="$1" ver="$2" urls="$3"
+  local out="$build_dir/$name-$ver.tar.xz"
+  if [ -f "$out" ] && xz -t "$out" 2>/dev/null; then
+    echo "$out"; return 0
+  fi
+  local url
+  for url in $urls; do
+    echo "  fetching $url" >&2
+    if curl -fsSL -o "$out" "$url" && xz -t "$out" 2>/dev/null; then
+      echo "$out"; return 0
+    fi
+    rm -f "$out"
+  done
+  echo "ERROR: no working mirror for $name-$ver.tar.xz" >&2
+  return 1
 }
 
-build_autotools() { # name version configure-extra-args...
-  local name="$1" ver="$2"; shift 2
-  local tarball="$build_dir/$name-$ver.tar.xz"
+build_autotools() { # name version url-list configure-extra-args...
+  local name="$1" ver="$2" urls="$3"; shift 3
   local srcdir="$build_dir/$name-$ver"
-  fetch "$MIRROR/$name-$ver.tar.xz" "$tarball"
+  local tarball; tarball="$(fetch_tarball "$name" "$ver" "$urls")"
   rm -rf "$srcdir"
   tar -C "$build_dir" -xf "$tarball"
   ( cd "$srcdir"
@@ -46,12 +70,12 @@ build_autotools() { # name version configure-extra-args...
 }
 
 echo "==> Building librevenge $LIBREVENGE_VER"
-build_autotools librevenge "$LIBREVENGE_VER" --disable-tests
+build_autotools librevenge "$LIBREVENGE_VER" "$LIBREVENGE_URLS" --disable-tests
 
 echo "==> Building libmspub $LIBMSPUB_VER"
 # GCC 13+ dropped transitive <cstdint>; the 2018-era headers need it forced.
 CXXFLAGS="${CXXFLAGS:-} -O2 -include cstdint" \
-  build_autotools libmspub "$LIBMSPUB_VER"
+  build_autotools libmspub "$LIBMSPUB_VER" "$LIBMSPUB_URLS"
 
 echo "==> Locating svg2pdf.exe"
 svg2pdf="${SVG2PDF_EXE:-}"          # CI passes an explicit path
