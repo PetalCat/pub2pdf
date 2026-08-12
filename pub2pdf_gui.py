@@ -126,6 +126,8 @@ class App(DnDTk):
         self.rows: list[FileRow] = []
         self.events: queue.Queue = queue.Queue()
         self.running = False
+        self.cancel = threading.Event()
+        self.worker: threading.Thread | None = None
         self.filter_failed = False
         self._filtered = False
 
@@ -137,7 +139,13 @@ class App(DnDTk):
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _on_close(self) -> None:
-        # Cancel the pending poll so it can't fire on a destroyed window.
+        # Signal the worker to stop and give it a bounded moment to fall out of
+        # the `with PublisherEngine()` block, so __exit__ runs Quit() and we don't
+        # orphan an invisible MSPUB.EXE holding COM + file locks. A wedged COM call
+        # can't hang the close: after the timeout we destroy anyway.
+        self.cancel.set()
+        if self.worker and self.worker.is_alive():
+            self.worker.join(timeout=5)
         try:
             self.after_cancel(self._after_id)
         except Exception:  # noqa: BLE001 — teardown, swallow Tcl noise
@@ -221,6 +229,12 @@ class App(DnDTk):
                                          fg_color=ACCENT, command=self._start)
         self.convert_btn.grid(row=1, column=4, sticky="e", padx=(8, 0))
         self.convert_btn.configure(state="disabled")   # nothing to convert until files land
+        # Stop only appears mid-run; it's the safe way to end a batch (the close
+        # button would too, but Stop lets the current file finish cleanly first).
+        self.stop_btn = ctk.CTkButton(self.footer, text="Stop", width=100,
+                                      fg_color="transparent", border_width=1,
+                                      border_color="#8a5a00", text_color="#ffdf9e",
+                                      hover_color="#3a2a00", command=self._stop)
 
         # Register drop targets.
         for w in (self.drop, self.drop_label):
@@ -324,11 +338,16 @@ class App(DnDTk):
         if not rows or self.running:
             return
         self.running = True
+        self.cancel.clear()
         self._set_busy(True)
         for r in rows:
             r.set_state("queued")
-        thread = threading.Thread(target=self._worker, args=(rows,), daemon=True)
-        thread.start()
+        self.worker = threading.Thread(target=self._worker, args=(rows,), daemon=True)
+        self.worker.start()
+
+    def _stop(self) -> None:
+        self.cancel.set()
+        self.stop_btn.configure(text="Stopping…", state="disabled")
 
     def _worker(self, rows: list[FileRow]) -> None:
         # Runs off the UI thread. All UI changes are posted back via self.events
@@ -336,6 +355,8 @@ class App(DnDTk):
         try:
             with pub2pdf.PublisherEngine() as engine:
                 for r in rows:
+                    if self.cancel.is_set():
+                        break   # leaves the with-block → __exit__ → Quit(), no orphan
                     self.events.put(("state", r, "converting", ""))
                     target_dir = self.output_dir or r.pub_file.parent
                     pdf = target_dir / (r.pub_file.stem + ".pdf")
@@ -375,6 +396,10 @@ class App(DnDTk):
         self.convert_btn.configure(text="Converting…" if busy else "Convert")
         if busy:
             self.convert_btn.configure(state="disabled")
+            self.stop_btn.configure(text="Stop", state="normal")
+            self.stop_btn.grid(row=1, column=3, padx=(0, 8))
+        else:
+            self.stop_btn.grid_forget()
         self.browse_btn.configure(state="disabled" if busy else "normal")
 
     def _update_summary(self) -> None:
@@ -431,9 +456,51 @@ class App(DnDTk):
 
 
 def _short(exc: Exception) -> str:
-    msg = str(exc).strip().splitlines()
-    text = msg[0] if msg else exc.__class__.__name__
-    return (text[:80] + "…") if len(text) > 80 else text
+    """Turn an engine/COM exception into a sentence a clerk can act on.
+
+    pywin32 com_error args = (hresult, strerror, excepinfo, argerr). When Publisher
+    gives a human description (excepinfo[2]) we keyword-map it. A locked output PDF,
+    though, raises an opaque error with NO description, so we (a) decode a Win32-
+    wrapped HRESULT if there is one, and (b) otherwise fall back to a helpful
+    sentence about the common cause rather than printing a raw HRESULT tuple.
+    """
+    args = getattr(exc, "args", ())
+    desc, codes = "", []
+    if len(args) >= 3 and isinstance(args[2], (tuple, list)):
+        info = args[2]
+        if len(info) > 2 and info[2]:
+            desc = str(info[2]).strip()
+        if len(info) > 5 and isinstance(info[5], int):
+            codes.append(info[5] & 0xFFFFFFFF)
+    if args and isinstance(args[0], int):
+        codes.append(args[0] & 0xFFFFFFFF)
+
+    if desc:
+        low = desc.lower()
+        if any(s in low for s in ("another process", "being used", "sharing violation", "in use")):
+            return "This PDF is open in another program — close it and retry."
+        if "denied" in low or "permission" in low:
+            return "Can't write to that folder — check its permissions."
+        if "password" in low or "protected" in low:
+            return "This .pub is password-protected — open it in Publisher first."
+        if "cannot locate" in low or "not found" in low:
+            return "The .pub file was moved or deleted before it could convert."
+        return (desc[:90] + "…") if len(desc) > 90 else desc
+
+    # No description — decode a Win32-wrapped HRESULT (0x8007xxxx) if we have one.
+    for code in codes:
+        if (code & 0xFFFF0000) == 0x80070000:
+            win32 = code & 0xFFFF
+            if win32 in (32, 33):
+                return "This PDF is open in another program — close it and retry."
+            if win32 == 5:
+                return "Can't write to that folder — check its permissions."
+            if win32 in (2, 3):
+                return "The .pub file or folder was moved or deleted."
+
+    # Opaque export failure — name the two common causes rather than an HRESULT.
+    return ("Couldn't save the PDF — it may be open in another program, or the "
+            "folder may be read-only. Close any open copy and retry.")
 
 
 def main() -> None:
