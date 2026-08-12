@@ -100,15 +100,28 @@ def icon(name: str, size: int = 18, light: str = "#39424e", dark: str = "#c2ccd8
 LOGO_TILE = "#2f6fe0"
 
 
+LOGO_PDF = "#e23b34"
+
+
 def make_logo(size: int) -> Image.Image:
     img, d, s = _canvas(size)
     pad = s * 0.05
     d.rounded_rectangle([pad, pad, s - pad, s - pad], radius=s * 0.23, fill=LOGO_TILE)
-    w = max(2, int(s * 0.115))
+    # A SOLID white page with a folded corner (mass that survives 16px, and reads
+    # as a document rather than a sign-out bracket) and a RED arrow leaving it —
+    # "convert a document, out to PDF" in one glance. The red is the second colour
+    # that makes it findable in a taskbar row of blue tiles; kept inside the tile
+    # so it never reads as a notification badge.
+    px0, py0, px1, py1 = s * 0.19, s * 0.24, s * 0.45, s * 0.76
+    fold = s * 0.11
+    d.polygon([(px0, py0), (px1 - fold, py0), (px1, py0 + fold), (px1, py1), (px0, py1)],
+              fill="#ffffff")
+    d.polygon([(px1 - fold, py0), (px1 - fold, py0 + fold), (px1, py0 + fold)], fill="#c4d0e6")
+    w = max(2, int(s * 0.10))
     cy = s * 0.5
-    _round_line(d, [(s * 0.31, cy), (s * 0.60, cy)], "#ffffff", w)              # shaft
-    _round_line(d, [(s * 0.50, cy - s * 0.16), (s * 0.67, cy),
-                    (s * 0.50, cy + s * 0.16)], "#ffffff", w)                    # head
+    _round_line(d, [(s * 0.50, cy), (s * 0.77, cy)], LOGO_PDF, w)               # shaft
+    _round_line(d, [(s * 0.66, cy - s * 0.13), (s * 0.82, cy),
+                    (s * 0.66, cy + s * 0.13)], LOGO_PDF, w)                     # head
     return img.resize((size, size), Image.LANCZOS)
 
 
