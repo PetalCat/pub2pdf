@@ -39,7 +39,8 @@ import pub2pdf
 APP_NAME = "pub2pdf"
 ACCENT = "#2f6df6"
 COL = {
-    "queued": ("#4a4a4a", "#e8e8e8"),
+    "pending": ("#2f2f2f", "#9a9a9a"),     # at rest, not yet converted (not "queued")
+    "queued": ("#4a4a4a", "#e8e8e8"),      # in line for a run that's actually happening
     "converting": ("#8a5a00", "#ffdf9e"),
     "done": ("#1f5f37", "#b8f0c9"),
     "failed": ("#6e1f1f", "#ffc2c2"),
@@ -141,7 +142,12 @@ class FileRow(ctk.CTkFrame):
         super().__init__(master, fg_color="transparent")
         self.pub_file = pub_file
         self.pdf_path: Path | None = None
-        self.state = "done" if note else "queued"
+        # from_history: already converted on a prior day (shown, unticked). Distinct
+        # from converted_now, which is set only when THIS session converts it — so
+        # the summary can report this run's outcome without counting old history.
+        self.from_history = bool(note)
+        self.converted_now = False
+        self.state = "done" if note else "pending"
 
         self.grid_columnconfigure(1, weight=1)
         self.sel = ctk.BooleanVar(value=selected)
@@ -151,8 +157,8 @@ class FileRow(ctk.CTkFrame):
         self.name.grid(row=0, column=1, sticky="ew", padx=(2, 8), pady=6)
         self.detail = ctk.CTkLabel(self, text=note, anchor="e", text_color="#8b8b8b")
         self.detail.grid(row=0, column=2, sticky="e", padx=(0, 8))
-        chip_state = "done" if note else "queued"
-        self.chip = ctk.CTkLabel(self, text="Done" if note else "Queued", width=110,
+        chip_state = "done" if note else "pending"
+        self.chip = ctk.CTkLabel(self, text="Done" if note else "Not converted", width=110,
                                  corner_radius=8, fg_color=COL[chip_state][0],
                                  text_color=COL[chip_state][1])
         self.chip.grid(row=0, column=3, padx=(0, 10), pady=6)
@@ -163,8 +169,8 @@ class FileRow(ctk.CTkFrame):
 
     def set_state(self, state: str, detail: str = "") -> None:
         self.state = state
-        label = {"queued": "Queued", "converting": "Converting…",
-                 "done": "Done", "failed": "Failed"}[state]
+        label = {"pending": "Not converted", "queued": "Queued",
+                 "converting": "Converting…", "done": "Done", "failed": "Failed"}[state]
         bg, fg = COL[state]
         self.chip.configure(text=label, fg_color=bg, text_color=fg)
         # The chip carries the state — one colour, one place. Filename stays neutral.
@@ -246,14 +252,26 @@ class ScopeDialog(ctk.CTkToplevel):
         self._update_count()
 
     def _update_count(self) -> None:
-        n = sum(1 for l in self.app.scan_locations if l.get("enabled", True))
-        self.count_lbl.configure(text=f"Will scan {n} location{'s' if n != 1 else ''}")
+        # Count only what will actually be scanned — a ticked-but-unreachable
+        # location is NOT in the promise. The preflight line's whole job is to
+        # tell the truth before you commit.
+        enabled = [l for l in self.app.scan_locations if l.get("enabled", True)]
+        reachable = [l for l in enabled if os.path.isdir(l["path"])]
+        n, unavailable = len(reachable), len(enabled) - len(reachable)
+        txt = f"Will scan {n} location{'s' if n != 1 else ''}"
+        if unavailable:
+            txt += f"   ·   {unavailable} unavailable"
+        self.count_lbl.configure(text=txt)
         self.scan_btn.configure(state="normal" if n else "disabled")
 
     def _add_path(self, path: str) -> None:
-        path = path.strip().rstrip("/").rstrip("\\") or path.strip()
+        path = path.strip()
         if not path:
             return
+        # normpath keeps a drive root's backslash (C:/ -> C:\) and a UNC's double
+        # backslash, while dropping trailing separators — the rstrip hack collapsed
+        # "C:\" to "C:", which means current-dir-on-C, not the drive root.
+        path = os.path.normpath(path)
         keys = {os.path.normcase(l["path"]) for l in self.app.scan_locations}
         if os.path.normcase(path) in keys:
             return
@@ -633,6 +651,8 @@ class App(DnDTk):
                     row.set_state(a, b)
                 elif kind == "done":
                     row.pdf_path = Path(a)
+                    row.converted_now = True
+                    row.from_history = False
                     row.set_state("done", "converted just now")
                     self._record_done(row.pub_file)
                 elif kind == "fatal":
@@ -674,15 +694,19 @@ class App(DnDTk):
 
     def _update_summary(self) -> None:
         total = len(self.rows)
-        done = sum(r.state == "done" for r in self.rows)
-        failed = sum(r.state == "failed" for r in self.rows)
         selected = sum(r.selected and r.state != "converting" for r in self.rows)
+        converted = sum(r.converted_now for r in self.rows)   # THIS run, not history
+        failed = sum(r.state == "failed" for r in self.rows)
 
+        # One axis at a time: selection (files / selected), then this-run outcome
+        # (converted). History-done rows carry their date inline, not in this line,
+        # and failures ride the separate red label — so nothing double-counts and
+        # the line never mixes "already done before" with "just did".
         parts = [f"{total} file{'s' if total != 1 else ''}"]
         if selected:
-            parts.append(f"{selected} ticked")
-        if done:
-            parts.append(f"{done} done")
+            parts.append(f"{selected} selected")
+        if converted:
+            parts.append(f"{converted} converted")
         self.summary.configure(text="   ·   ".join(parts) if total else "")
 
         if self.filter_failed and not failed:
@@ -700,7 +724,7 @@ class App(DnDTk):
         col = 2
         if failed and not self.running and not self.scanning:
             self.retry_btn.grid(row=1, column=col, padx=(0, 8)); col += 1
-        if done and not self.running and not self.scanning:
+        if converted and not self.running and not self.scanning:
             self.open_btn.grid(row=1, column=col, padx=(0, 8))
 
         self._apply_filter()
