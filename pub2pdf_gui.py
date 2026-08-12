@@ -90,11 +90,13 @@ class FileRow(ctk.CTkFrame):
         self.state = "queued"
 
         self.grid_columnconfigure(0, weight=1)
-        self.name = ctk.CTkLabel(self, text=pub_file.name, anchor="w")
+        self.name = ctk.CTkLabel(self, text=pub_file.name, anchor="w", text_color="#dcdcdc")
         self.name.grid(row=0, column=0, sticky="ew", padx=(10, 8), pady=6)
+        self.detail = ctk.CTkLabel(self, text="", anchor="e", text_color="#b98a8a")
+        self.detail.grid(row=0, column=1, sticky="e", padx=(0, 8))
         self.chip = ctk.CTkLabel(self, text="Queued", width=110, corner_radius=8,
                                  fg_color=COL["queued"][0], text_color=COL["queued"][1])
-        self.chip.grid(row=0, column=1, padx=(0, 10), pady=6)
+        self.chip.grid(row=0, column=2, padx=(0, 10), pady=6)
 
     def set_state(self, state: str, detail: str = "") -> None:
         self.state = state
@@ -102,14 +104,10 @@ class FileRow(ctk.CTkFrame):
                  "done": "Done", "failed": "Failed"}[state]
         bg, fg = COL[state]
         self.chip.configure(text=label, fg_color=bg, text_color=fg)
-        # Let the chip carry the state; keep the filename neutral so we don't say
-        # the same thing twice (the old green-on-green). Only a failure adds text
-        # the user needs — the reason, inline — in a muted red.
-        if state == "failed" and detail:
-            self.name.configure(text=f"{self.pub_file.name}   —   {detail}",
-                                text_color="#e79a9a")
-        else:
-            self.name.configure(text=self.pub_file.name, text_color="#dcdcdc")
+        # The chip carries the state — one colour, one place. The filename stays
+        # neutral; a failure adds the reason the user needs, inline and muted, so
+        # the row isn't three separate reds saying the same thing.
+        self.detail.configure(text=detail if state == "failed" and detail else "")
 
 
 class App(DnDTk):
@@ -128,6 +126,8 @@ class App(DnDTk):
         self.rows: list[FileRow] = []
         self.events: queue.Queue = queue.Queue()
         self.running = False
+        self.filter_failed = False
+        self._filtered = False
 
         self.publisher = pub2pdf.publisher_exe()
         self._build()
@@ -190,13 +190,23 @@ class App(DnDTk):
         self.footer.grid(row=2, column=0, sticky="ew", padx=20, pady=(6, 16))
         self.footer.grid_columnconfigure(1, weight=1)
 
+        # Status line FIRST so the most important line isn't last in reading order.
+        # Only the failure count is coloured — red is a pointer to what needs
+        # attention, not a verdict on the whole run — and it's clickable to filter
+        # the list down to just the failures (the only way to find 4 reds in 200).
+        status = ctk.CTkFrame(self.footer, fg_color="transparent")
+        status.grid(row=0, column=0, columnspan=5, sticky="w", pady=(0, 8))
+        self.summary = ctk.CTkLabel(status, text="", text_color="#9aa0a6")
+        self.summary.pack(side="left")
+        self.failed_lbl = ctk.CTkLabel(status, text="", text_color="#ff8a8a", cursor="hand2")
+        self.failed_lbl.pack(side="left", padx=(6, 0))
+        self.failed_lbl.bind("<Button-1>", lambda e: self._toggle_failed_filter())
+
         self.out_btn = ctk.CTkButton(self.footer, text=self._out_label(), width=240,
                                      fg_color="#2a2a2a", border_width=1,
                                      border_color="#4a4a4a", hover_color="#333333",
                                      anchor="w", command=self._choose_output)
-        self.out_btn.grid(row=0, column=0, sticky="w")
-        self.summary = ctk.CTkLabel(self.footer, text="", text_color="#9aa0a6")
-        self.summary.grid(row=1, column=0, columnspan=5, padx=2, pady=(8, 0), sticky="w")
+        self.out_btn.grid(row=1, column=0, sticky="w")
 
         # Retry is the safest action on the screen — dress it as a secondary
         # action, never in the red it would share with the Failed chip.
@@ -209,7 +219,7 @@ class App(DnDTk):
                                       border_color="#3a3a3a", command=self._open_output)
         self.convert_btn = ctk.CTkButton(self.footer, text="Convert", width=140,
                                          fg_color=ACCENT, command=self._start)
-        self.convert_btn.grid(row=0, column=4, sticky="e", padx=(8, 0))
+        self.convert_btn.grid(row=1, column=4, sticky="e", padx=(8, 0))
         self.convert_btn.configure(state="disabled")   # nothing to convert until files land
 
         # Register drop targets.
@@ -371,14 +381,19 @@ class App(DnDTk):
         total = len(self.rows)
         done = sum(r.state == "done" for r in self.rows)
         failed = sum(r.state == "failed" for r in self.rows)
+        # Only the failure count is coloured; the good news stays neutral.
         parts = [f"{total} file{'s' if total != 1 else ''}"]
         if done:
             parts.append(f"{done} done")
+        self.summary.configure(text="   ·   ".join(parts) if total else "")
+
+        if self.filter_failed and not failed:      # nothing failed → drop the filter
+            self.filter_failed = False
         if failed:
-            parts.append(f"{failed} failed")
-        self.summary.configure(
-            text="   ·   ".join(parts) if total else "",
-            text_color="#ff8a8a" if failed else "#9aa0a6")
+            self.failed_lbl.configure(
+                text=f"·   {failed} failed" + ("   (show all)" if self.filter_failed else ""))
+        else:
+            self.failed_lbl.configure(text="")
 
         # Convert is live only when there's something to do and Publisher is here.
         actionable = any(r.state in ("queued", "failed") for r in self.rows)
@@ -391,9 +406,28 @@ class App(DnDTk):
         self.open_btn.grid_forget()
         col = 2
         if failed and not self.running:
-            self.retry_btn.grid(row=0, column=col, padx=(0, 8)); col += 1
+            self.retry_btn.grid(row=1, column=col, padx=(0, 8)); col += 1
         if done and not self.running:
-            self.open_btn.grid(row=0, column=col, padx=(0, 8))
+            self.open_btn.grid(row=1, column=col, padx=(0, 8))
+
+        self._apply_filter()
+
+    def _toggle_failed_filter(self) -> None:
+        # Click the red "N failed" to show only the failures — the only way to
+        # find 4 reds in 200 rows — and click "(show all)" to restore.
+        if any(r.state == "failed" for r in self.rows):
+            self.filter_failed = not self.filter_failed
+            self._update_summary()
+
+    def _apply_filter(self) -> None:
+        if self.filter_failed:
+            for r in self.rows:
+                (r.grid_remove if r.state != "failed" else r.grid)()
+            self._filtered = True
+        elif self._filtered:
+            for r in self.rows:
+                r.grid()
+            self._filtered = False
 
 
 def _short(exc: Exception) -> str:
