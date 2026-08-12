@@ -3,3 +3,4 @@
 customtkinter>=5.2
 tkinterdnd2>=0.4
 pywin32>=306
+pillow>=10.0        # monoline UI icons are drawn with PIL at runtime
