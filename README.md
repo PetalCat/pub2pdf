@@ -4,7 +4,7 @@ Converts Microsoft Publisher (`.pub`) files to PDF.
 
 **Two deliverables in this repo:**
 
-1. **`pub2pdf.py`** — script with two engines, auto-detected (see table below)
+1. **`pub2pdf.py`** — script; Publisher-faithful by default (see table below)
 2. **standalone app** — fully self-contained, **no Office, no LibreOffice, no
    Python needed**: libmspub 0.1.4 + librevenge 0.0.5 (compiled with MinGW-w64),
    svg2pdf (Rust/resvg), and a PyInstaller orchestrator
@@ -22,10 +22,12 @@ Converts Microsoft Publisher (`.pub`) files to PDF.
 | `libreoffice` | LibreOffice (free, any OS) | Approximate — LibreOffice re-renders the layout with its libmspub filter |
 | standalone app | nothing | Approximate — same libmspub parser as LibreOffice, rendered via resvg |
 
-Auto-detection prefers Publisher when installed, otherwise falls back to
-LibreOffice (`soffice` on PATH or in the standard install directory).
-So the same script works on machines **without any Microsoft Office install** —
-just install LibreOffice there.
+**Microsoft Publisher is required.** The default engine drives Publisher over
+COM for a pixel-identical PDF and, if Publisher is not installed, stops with a
+message telling the user to have IT install it — it never silently falls back to
+the approximate renderer. The `libreoffice` engine still exists but is reachable
+**only** by asking for it explicitly (`--engine libreoffice`), which prints a
+fidelity warning; it is never selected automatically.
 
 ## Usage
 
