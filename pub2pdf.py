@@ -191,21 +191,27 @@ PUB_EXTS = (".pub",)
 OLE2_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 
 
-def is_publisher_file(path: Path) -> bool:
-    """True if the file is an OLE2 compound document, which is what Microsoft
-    Publisher writes (header D0 CF 11 E0 A1 B1 1A E1, plus Quill/Escher streams).
+def classify_pub(path: Path) -> str:
+    """'publisher' | 'other' | 'unreadable'.
 
-    The .pub extension is badly overloaded — the flood on any drive scan is SSH
-    public keys (ssh-rsa / ssh-ed25519 …, plain text), which would otherwise show
-    up as documents and fail conversion one confusing row at a time. Eight bytes,
-    no parsing, no Publisher round-trip. Anything text- or zip-based is not an
-    OLE2 doc and is correctly excluded.
+    A real Publisher file is an OLE2 compound document (header D0 CF 11 E0 A1 B1
+    1A E1, plus Quill/Escher streams). The .pub extension is badly overloaded —
+    the flood on any drive scan is SSH public keys (ssh-rsa / ssh-ed25519 …, plain
+    text), correctly 'other'. But 'couldn't read it' (permissions on a network
+    share) is a THIRD outcome, not 'other': counting an unreadable file as a
+    non-Publisher impostor tells the user their documents were junk when they were
+    just locked. Keep the two apart. Eight bytes, no parsing.
     """
     try:
         with open(path, "rb") as f:
-            return f.read(8) == OLE2_MAGIC
+            head = f.read(8)
     except OSError:
-        return False
+        return "unreadable"
+    return "publisher" if head == OLE2_MAGIC else "other"
+
+
+def is_publisher_file(path: Path) -> bool:
+    return classify_pub(path) == "publisher"
 
 
 def collect_pub_files(path: Path, recurse: bool) -> list[Path]:

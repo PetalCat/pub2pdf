@@ -115,10 +115,10 @@ def list_drives() -> list[tuple[str, str]]:
 
 
 def iter_pub_candidates(root: str, cancel: threading.Event):
-    """Yield (path, is_publisher) for every .pub under root, pruning system dirs.
-    The caller keeps the real Publisher files and counts the impostors — an
-    unfiltered scan is mostly SSH public keys. Permission errors and unreadable
-    subtrees are skipped, never fatal."""
+    """Yield (path, status) for every .pub under root, status one of
+    publisher/other/unreadable, pruning system dirs. The caller keeps the real
+    Publisher files and counts 'other' (mostly SSH keys) and 'unreadable'
+    (permissions) separately. Permission errors on directories are skipped."""
     for dirpath, dirnames, filenames in os.walk(root, onerror=lambda e: None):
         if cancel.is_set():
             return
@@ -127,7 +127,7 @@ def iter_pub_candidates(root: str, cancel: threading.Event):
         for fn in filenames:
             if fn.lower().endswith(pub2pdf.PUB_EXTS):
                 p = Path(dirpath) / fn
-                yield p, pub2pdf.is_publisher_file(p)
+                yield p, pub2pdf.classify_pub(p)
 
 
 class DnDTk(ctk.CTk, tkinterdnd2.TkinterDnD.DnDWrapper):
@@ -552,7 +552,7 @@ class App(DnDTk):
         self.worker.start()
 
     def _scan_worker(self, roots: list[str]) -> None:
-        found = skipped = 0
+        found = skipped = unreadable = 0
         for root in roots:
             if self.scan_cancel.is_set():
                 break
@@ -565,17 +565,19 @@ class App(DnDTk):
                 continue
             self.events.put(("scan_note", None, root, "scanning"))
             try:
-                for pub, is_pub in iter_pub_candidates(root, self.scan_cancel):
+                for pub, status in iter_pub_candidates(root, self.scan_cancel):
                     if self.scan_cancel.is_set():
                         break
-                    if is_pub:
+                    if status == "publisher":
                         found += 1
                         self.events.put(("scan_found", None, str(pub), found))
+                    elif status == "unreadable":
+                        unreadable += 1   # locked/permissions — "go check permissions"
                     else:
-                        skipped += 1   # .pub impostor (SSH key, etc.) — silently dropped
+                        skipped += 1      # .pub impostor (SSH key, etc.)
             except Exception:  # noqa: BLE001 — a bad subtree shouldn't kill the scan
                 pass
-        self.events.put(("scan_done", None, skipped, found))
+        self.events.put(("scan_done", (skipped, unreadable), "", found))
 
     def _stop_scan(self) -> None:
         self.scan_cancel.set()
@@ -677,10 +679,15 @@ class App(DnDTk):
                 elif kind == "scan_done":
                     self.scanning = False
                     self._set_busy(False)
-                    skipped = a or 0
+                    skipped, unreadable = row if isinstance(row, tuple) else (0, 0)
                     core = (f"{b} Publisher file{'s' if b != 1 else ''} found"
                             if b else "no Publisher files found")
-                    tail = (f" ({skipped} non-Publisher .pub skipped)" if skipped else "")
+                    bits = []
+                    if skipped:
+                        bits.append(f"{skipped} non-Publisher .pub skipped")
+                    if unreadable:
+                        bits.append(f"{unreadable} unreadable")   # = go check permissions
+                    tail = f" ({', '.join(bits)})" if bits else ""
                     self.subtitle.configure(text=f"Scan complete — {core}{tail}.",
                                             text_color="#9aa0a6")
         except queue.Empty:
