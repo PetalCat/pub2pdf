@@ -1,23 +1,27 @@
 #!/usr/bin/env python3
 """Convert Microsoft Publisher (.pub) files to PDF.
 
-Two conversion engines, auto-detected in this order:
+Microsoft Publisher is REQUIRED. The tool drives Publisher over COM for a
+pixel-identical PDF, and if Publisher is not installed it stops with a clear
+message rather than silently producing a lower-fidelity file.
 
   publisher    Microsoft Publisher via COM automation (Windows + Office only).
-               Pixel-identical to Publisher's own "Save as PDF".
+               Pixel-identical to Publisher's own "Save as PDF". The default.
                Requires the pywin32 package.
   libreoffice  LibreOffice headless (soffice --convert-to pdf) using its
-               libmspub import filter. Works without any Microsoft Office
-               install, but layout fidelity is approximate.
+               libmspub import filter. APPROXIMATE layout — fonts may
+               substitute and text may reflow. Reachable only by asking for it
+               explicitly with --engine libreoffice; never used as a fallback.
 
 Usage:
     py pub2pdf.py newsletter.pub
     py pub2pdf.py C:\\flyers --recurse --output-dir C:\\flyers\\pdf
-    py pub2pdf.py C:\\flyers --engine libreoffice --force
+    py pub2pdf.py C:\\flyers --engine libreoffice --force   # approximate, opt-in
 """
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -43,15 +47,44 @@ def find_soffice() -> str | None:
     return None
 
 
-def publisher_com_available() -> bool:
+def publisher_exe() -> str | None:
+    """Path to Publisher's registered COM server if Publisher exists AND is
+    installed, else None.
+
+    Both halves are checked: the Publisher.Application ProgID must be registered,
+    and the LocalServer32 binary it points at must actually be on disk. A stale
+    ProgID left behind by an uninstall (registry present, MSPUB.EXE gone) reads
+    as not-installed — the tool must not claim faithful conversion is available
+    when it isn't.
+    """
     if sys.platform != "win32":
-        return False
+        return None
     try:
         import winreg
-        with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, "Publisher.Application"):
-            return True
-    except OSError:
-        return False
+    except ImportError:
+        return None
+
+    def _default(path: str) -> str | None:
+        try:
+            with winreg.OpenKey(winreg.HKEY_CLASSES_ROOT, path) as key:
+                return winreg.QueryValueEx(key, None)[0]
+        except OSError:
+            return None
+
+    clsid = _default(r"Publisher.Application\CLSID")
+    if not clsid:
+        return None
+    server = _default(rf"CLSID\{clsid}\LocalServer32")
+    if not server:
+        return None
+    # LocalServer32 looks like:  C:\Program Files\...\MSPUB.EXE /automation
+    # The path can contain spaces and the trailing switch is unquoted, so match
+    # up to the .exe rather than splitting on the first space.
+    m = re.match(r'\s*"?(.+?\.exe)"?', server, re.IGNORECASE)
+    if not m:
+        return None
+    exe = m.group(1)
+    return exe if os.path.isfile(exe) else None
 
 
 class PublisherEngine:
@@ -115,26 +148,41 @@ class LibreOfficeEngine:
 
 
 def pick_engine(choice: str):
-    if choice in ("auto", "publisher") and publisher_com_available():
+    # Publisher is REQUIRED, not merely preferred: the tool must never silently
+    # hand back an approximate PDF. 'auto' and 'publisher' both demand the
+    # faithful COM path; the approximate LibreOffice engine is reachable only by
+    # asking for it explicitly with --engine libreoffice.
+    if choice in ("auto", "publisher"):
+        if not publisher_exe():
+            sys.exit(
+                "error: Microsoft Publisher is required but is not installed on "
+                "this machine.\n"
+                "Ask IT to install Microsoft Publisher (it ships with Office "
+                "Professional / Microsoft 365 Apps for enterprise).\n"
+                "If you knowingly accept lower-fidelity output you can force the "
+                "approximate engine with:  --engine libreoffice"
+            )
         try:
             import win32com.client  # noqa: F401
-            return PublisherEngine()
         except ImportError:
-            if choice == "publisher":
-                sys.exit("error: pywin32 not installed (py -m pip install pywin32)")
-    elif choice == "publisher":
-        sys.exit("error: Microsoft Publisher is not installed on this machine")
+            sys.exit(
+                "error: Microsoft Publisher is installed but the pywin32 package "
+                "is missing, so it can't be driven.\n"
+                "  py -m pip install pywin32"
+            )
+        return PublisherEngine()
 
+    # choice == "libreoffice": explicit, deliberate opt-in to approximate output.
     soffice = find_soffice()
-    if soffice:
-        return LibreOfficeEngine(soffice)
-    if choice == "libreoffice":
+    if not soffice:
         sys.exit("error: LibreOffice not found (install it or add soffice to PATH)")
-    sys.exit(
-        "error: no conversion engine available.\n"
-        "Install Microsoft Publisher (plus 'py -m pip install pywin32') "
-        "or LibreOffice (https://www.libreoffice.org/)."
+    print(
+        "WARNING: --engine libreoffice produces APPROXIMATE layout via LibreOffice's "
+        "libmspub filter, not Publisher. Fonts may substitute and text boxes may "
+        "reflow. Use Publisher for a faithful PDF.",
+        file=sys.stderr,
     )
+    return LibreOfficeEngine(soffice)
 
 
 def collect_pub_files(path: Path, recurse: bool) -> list[Path]:
@@ -194,8 +242,9 @@ def main() -> None:
     parser.add_argument(
         "-e", "--engine", choices=["auto", "publisher", "libreoffice"],
         default="auto",
-        help="conversion engine (default: auto — Publisher if installed, "
-             "else LibreOffice)",
+        help="conversion engine (default: auto — require Microsoft Publisher and "
+             "convert faithfully over COM; 'libreoffice' forces the approximate "
+             "engine, never used as a fallback)",
     )
     args = parser.parse_args()
 
