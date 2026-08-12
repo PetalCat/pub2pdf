@@ -185,14 +185,40 @@ def pick_engine(choice: str):
     return LibreOfficeEngine(soffice)
 
 
+# .pub only: Parker confirmed no .pubx files exist, so no speculative support for
+# a format nobody has. If one ever turns up, inspect a real sample and decide then.
+PUB_EXTS = (".pub",)
+OLE2_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
+
+def is_publisher_file(path: Path) -> bool:
+    """True if the file is an OLE2 compound document, which is what Microsoft
+    Publisher writes (header D0 CF 11 E0 A1 B1 1A E1, plus Quill/Escher streams).
+
+    The .pub extension is badly overloaded — the flood on any drive scan is SSH
+    public keys (ssh-rsa / ssh-ed25519 …, plain text), which would otherwise show
+    up as documents and fail conversion one confusing row at a time. Eight bytes,
+    no parsing, no Publisher round-trip. Anything text- or zip-based is not an
+    OLE2 doc and is correctly excluded.
+    """
+    try:
+        with open(path, "rb") as f:
+            return f.read(8) == OLE2_MAGIC
+    except OSError:
+        return False
+
+
 def collect_pub_files(path: Path, recurse: bool) -> list[Path]:
     if path.is_file():
-        if path.suffix.lower() != ".pub":
-            sys.exit(f"error: not a .pub file: {path}")
+        # An explicitly named file is the user's choice — don't second-guess it.
+        if path.suffix.lower() not in PUB_EXTS:
+            sys.exit(f"error: not a Publisher file: {path}")
         return [path]
     if path.is_dir():
-        pattern = "**/*.pub" if recurse else "*.pub"
-        return sorted(p for p in path.glob(pattern) if p.is_file())
+        pats = [f"**/*{e}" for e in PUB_EXTS] if recurse else [f"*{e}" for e in PUB_EXTS]
+        cands = {p for pat in pats for p in path.glob(pat) if p.is_file()}
+        # Bulk discovery: keep only real Publisher files, drop the .pub impostors.
+        return sorted(p for p in cands if is_publisher_file(p))
     sys.exit(f"error: path not found: {path}")
 
 
