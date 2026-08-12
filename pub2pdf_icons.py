@@ -4,6 +4,7 @@ and downscaled with LANCZOS for clean anti-aliased strokes, then wrapped in a
 CTkImage. Lucide-style: single weight, round caps, generous padding.
 """
 
+import math
 from functools import lru_cache
 
 import customtkinter as ctk
@@ -67,6 +68,15 @@ def _draw(name: str, s: int, color: str, d: ImageDraw.ImageDraw) -> None:
         r = s * 0.30
         cx = cy = s * 0.5
         d.arc([cx - r, cy - r, cx + r, cy + r], start=0, end=270, fill=color, width=w)
+    elif name == "refresh":                     # retry — a rotate arrow, not a hazard
+        r = s * 0.30
+        cx = cy = s * 0.5
+        d.arc([cx - r, cy - r, cx + r, cy + r], start=35, end=315, fill=color, width=w)
+        a = math.radians(35)                    # arrowhead at the arc's lower-right end
+        px, py = cx + r * math.cos(a), cy + r * math.sin(a)
+        ah = s * 0.13
+        d.polygon([(px + ah * 0.9, py - ah * 0.4), (px - ah * 0.5, py - ah * 0.7),
+                   (px - ah * 0.1, py + ah * 0.8)], fill=color)
 
 
 def _render(name: str, size: int, color: str) -> Image.Image:
@@ -81,3 +91,36 @@ def icon(name: str, size: int = 18, light: str = "#39424e", dark: str = "#c2ccd8
     Windows appearance mode like the rest of the palette."""
     return ctk.CTkImage(light_image=_render(name, size, light),
                         dark_image=_render(name, size, dark), size=(size, size))
+
+
+# ---- app logo -------------------------------------------------------------
+# A tool, not a page: a solid rounded tile (strong on both light and dark task-
+# bars) with one bold white convert-arrow, no text (mush at 16px). Designed to
+# hold its silhouette down to 16px.
+LOGO_TILE = "#2f6fe0"
+
+
+def make_logo(size: int) -> Image.Image:
+    img, d, s = _canvas(size)
+    pad = s * 0.05
+    d.rounded_rectangle([pad, pad, s - pad, s - pad], radius=s * 0.23, fill=LOGO_TILE)
+    w = max(2, int(s * 0.115))
+    cy = s * 0.5
+    _round_line(d, [(s * 0.31, cy), (s * 0.60, cy)], "#ffffff", w)              # shaft
+    _round_line(d, [(s * 0.50, cy - s * 0.16), (s * 0.67, cy),
+                    (s * 0.50, cy + s * 0.16)], "#ffffff", w)                    # head
+    return img.resize((size, size), Image.LANCZOS)
+
+
+def save_ico(path) -> None:
+    """Write a multi-size .ico (16→256), each size rendered natively so the small
+    ones stay crisp instead of a mushy downscale of the 256."""
+    sizes = [256, 128, 64, 48, 32, 24, 16]
+    imgs = [make_logo(z) for z in sizes]
+    imgs[0].save(path, format="ICO", sizes=[(z, z) for z in sizes], append_images=imgs[1:])
+
+
+def logo_photo(size: int = 64):
+    """A Tk PhotoImage of the logo for the running window's titlebar/taskbar."""
+    from PIL import ImageTk
+    return ImageTk.PhotoImage(make_logo(size))

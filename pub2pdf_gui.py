@@ -43,14 +43,18 @@ TEXT3     = ("#4f5866", "#9ba8b7")
 ACCENT    = ("#1f5fe0", "#2a63d6")      # primary fill, white text
 ACCENT_TX = ("#1f5fe0", "#7aa7ff")      # accent as text / hairline
 ON_ACCENT = "#ffffff"
+REASON    = ("#b3121f", "#ff9ba0")      # failure reason text on a surface
+WARN_TX   = ("#b45309", "#ffcf7a")      # amber accent (Stop) on a surface
 RADIUS = 6
 
-COL = {                                  # status chip: (bg, fg)
-    "pending":    (SURFACE2,                ("#5c6675", "#9ba8b7")),
-    "queued":     (("#dde3ea", "#232a33"),  TEXT2),
-    "converting": (("#f6ead0", "#4a3410"),  ("#7a4e07", "#ffcf7a")),
-    "done":       (("#d8f2e2", "#153a28"),  ("#0e5a34", "#7fe3a6")),
-    "failed":     (("#fbe0e1", "#4a1e22"),  ("#a01722", "#ffa8ad")),
+# Status chips: solid semantic fills, IDENTICAL in both themes so a failure reads
+# equally urgent day and night; pending/queued stay quiet and theme-aware.
+COL = {                                  # (bg, fg)
+    "pending":    (("#e7ebf1", "#242a33"),  ("#5c6675", "#9ba8b7")),
+    "queued":     (("#d7dde5", "#2b323c"),  TEXT2),
+    "converting": ("#e0870c", "#241700"),
+    "done":       ("#1a8043", "#ffffff"),
+    "failed":     ("#c62330", "#ffffff"),
 }
 CHIP_LABEL = {"pending": "Not converted", "queued": "Queued",
               "converting": "Converting", "done": "Done", "failed": "Failed"}
@@ -165,7 +169,7 @@ class FileRow(ctk.CTkFrame):
         bg, fg = COL[state]
         self.chip.configure(text=CHIP_LABEL[state], fg_color=bg, text_color=fg)
         if state == "failed" and detail:
-            self.detail.configure(text=detail, text_color=COL["failed"][1])
+            self.detail.configure(text=detail, text_color=REASON)
         elif state == "done":
             self.detail.configure(text=detail or "converted", text_color=TEXT3)
             self.sel.set(False)
@@ -308,6 +312,7 @@ class App(DnDTk):
         self.geometry("780x620")
         self.minsize(720, 480)
         self._center()
+        self._set_window_icon()
 
         self.settings = load_settings()
         self.output_dir: Path | None = (
@@ -350,6 +355,25 @@ class App(DnDTk):
         x = (self.winfo_screenwidth() - w) // 2
         y = (self.winfo_screenheight() - h) // 3
         self.geometry(f"{w}x{h}+{x}+{y}")
+
+    def _set_window_icon(self) -> None:
+        # Prefer the multi-size .ico (bundled beside the exe / script) so the
+        # titlebar and taskbar match the Desktop icon; fall back to a runtime PIL
+        # render so the window is never left with the default Tk feather.
+        base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+        ico = os.path.join(base, "app.ico")
+        try:
+            if os.path.isfile(ico):
+                self.iconbitmap(ico)
+                return
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            import pub2pdf_icons
+            self._logo_img = pub2pdf_icons.logo_photo(64)   # keep a reference alive
+            self.iconphoto(True, self._logo_img)
+        except Exception:  # noqa: BLE001
+            pass
 
     def _build(self) -> None:
         self.grid_columnconfigure(0, weight=1)
@@ -401,7 +425,7 @@ class App(DnDTk):
         status.grid(row=0, column=0, columnspan=5, sticky="w", pady=(0, 10))
         self.summary = ctk.CTkLabel(status, text="", text_color=TEXT2)
         self.summary.pack(side="left")
-        self.failed_lbl = ctk.CTkLabel(status, text="", text_color=COL["failed"][1], cursor="hand2")
+        self.failed_lbl = ctk.CTkLabel(status, text="", text_color=REASON, cursor="hand2")
         self.failed_lbl.pack(side="left", padx=(8, 0))
         self.failed_lbl.bind("<Button-1>", lambda e: self._toggle_failed_filter())
 
@@ -415,10 +439,10 @@ class App(DnDTk):
         self.out_menu.grid(row=1, column=0, sticky="w")
         self.out_menu.set(self._out_display())
 
-        self.retry_btn = _ghost_button(self.footer, "Retry failed", self._retry_failed,
-                                       width=120, icon_name="alert")
-        self.retry_btn.configure(text_color=ACCENT_TX, border_color=ACCENT_TX,
-                                 image=icon("alert", 15, light=ACCENT_TX[0], dark=ACCENT_TX[1]))
+        # Retry is the safe action — a rotate arrow, never a hazard glyph.
+        self.retry_btn = _ghost_button(self.footer, "Retry failed", self._retry_failed, width=120)
+        self.retry_btn.configure(text_color=ACCENT_TX, border_color=ACCENT_TX, compound="left",
+                                 image=icon("refresh", 16, light=ACCENT_TX[0], dark=ACCENT_TX[1]))
         self.open_btn = _ghost_button(self.footer, "Open folder", self._open_output,
                                       width=120, icon_name="folder")
         self.convert_btn = ctk.CTkButton(self.footer, text="Convert", width=150, height=36,
@@ -429,8 +453,8 @@ class App(DnDTk):
         self.convert_btn.configure(state="disabled")
         self.stop_btn = ctk.CTkButton(self.footer, text="Stop", width=100, height=36,
                                       corner_radius=RADIUS, fg_color="transparent",
-                                      border_width=1, border_color=COL["converting"][1],
-                                      text_color=COL["converting"][1], hover_color=SURFACE2,
+                                      border_width=1, border_color=WARN_TX,
+                                      text_color=WARN_TX, hover_color=SURFACE2,
                                       command=self._stop)
 
         for w in (self.drop, self.drop_label, self.drop_icon):
@@ -659,7 +683,7 @@ class App(DnDTk):
                     self._record_done(row.pub_file)
                 elif kind == "fatal":
                     self.subtitle.configure(text=f"Publisher couldn't start: {b}",
-                                            text_color=COL["failed"][1])
+                                            text_color=REASON)
                 elif kind == "finished":
                     self.running = False
                     self._set_busy(False)
@@ -669,7 +693,7 @@ class App(DnDTk):
                 elif kind == "scan_note":
                     if b == "unavailable":
                         self.subtitle.configure(text=f"Skipped, unavailable: {a}",
-                                                text_color=COL["failed"][1])
+                                                text_color=REASON)
                 elif kind == "scan_done":
                     self.scanning = False
                     self._set_busy(False)
