@@ -116,7 +116,9 @@ class App(DnDTk):
         ctk.set_appearance_mode("dark")
         self.title(f"{APP_NAME} — Publisher to PDF")
         self.geometry("760x600")
-        self.minsize(620, 480)
+        # 720 min width so the footer's widest state (Save-to + Retry + Open +
+        # Convert all showing) never clips the primary button; below ~680 it does.
+        self.minsize(720, 480)
         self._center()
 
         self.settings = load_settings()
